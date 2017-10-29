@@ -1490,3 +1490,90 @@ describe Redis::SortedSet do
     @set_5.clear
   end
 end
+
+describe Redis::Stream do
+  before do
+    @stream = Redis::Stream.new('spec/stream')
+    @stream.clear
+  end
+
+  it "should handle sequential writing" do
+    @stream.should.empty?
+    member1_id = @stream << {foo: 1}
+    @stream.should.not.empty?
+    @stream.length.should == 1
+    @stream.members.should == {member1_id => {'foo' => '1'}}
+    member2_id = @stream << {bar: 2, baz: 3}
+    @stream.length.should == 2
+    @stream.members.should == {
+      member1_id => {'foo' => '1'},
+      member2_id => {'bar' => '2', 'baz' => '3'}
+    }
+  end
+
+  it "should handle transactional writing" do
+    @stream.redis.multi do
+      @stream << {foo: 1}
+      @stream << {bar: 2, baz: 3}
+    end
+    member1_id, member2_id = @stream.members.keys
+    member1_id.should.not == member2_id
+    member1_timestamp, member1_seq_num = member1_id.split("-")
+    member2_timestamp, member2_seq_num = member2_id.split("-")
+    member1_timestamp.should == member2_timestamp
+    member1_seq_num.should == '0'
+    member2_seq_num.should == '1'
+    @stream.members.should == {
+      member1_id => {'foo' => '1'},
+      member2_id => {'bar' => '2', 'baz' => '3'}
+    }
+  end
+
+  it "should handle writing under a specific timestamp" do
+    specific_timestamp = "#{Time.now.utc.to_i + 1234}000"
+    @stream[specific_timestamp] = {foo: 1}
+    member_id = @stream.members.keys.first
+    member_timestamp, member_seq_num = member_id.split("-")
+    member_timestamp.should == specific_timestamp
+    member_seq_num.should == '0'
+    @stream.members.should == {member_id => {'foo' => '1'}}
+    should.raise(Redis::CommandError) do
+      @stream[specific_timestamp] = {bar: 2}
+    end
+  end
+
+  it "should handle reading members with various arguments" do
+    member1_id = @stream << {foo: 1}
+    member2_id = @stream << {bar: 2}
+    member3_id = @stream << {baz: 3}
+    @stream.range.should == {
+      member1_id => {'foo' => '1'},
+      member2_id => {'bar' => '2'},
+      member3_id => {'baz' => '3'}
+    }
+    @stream.range("-", member2_id).should == {
+      member1_id => {'foo' => '1'},
+      member2_id => {'bar' => '2'}
+    }
+    @stream.range(member2_id, "+").should == {
+      member2_id => {'bar' => '2'},
+      member3_id => {'baz' => '3'}
+    }
+    @stream.range(member2_id, "+", count: 1).should == {
+      member2_id => {'bar' => '2'}
+    }
+    @stream.range(member1_id, member2_id, count: 1).should == {
+      member1_id => {'foo' => '1'}
+    }
+    @stream.range(max: member2_id).should == @stream.range("-", member2_id)
+    @stream.range(min: member2_id).should == @stream.range(member2_id, "+")
+    @stream.range(min: member2_id, count: 1).
+      should == @stream.range(member2_id, "+", count: 1)
+    @stream.range(min: member1_id, max: member2_id, count: 1).
+      should == @stream.range(member1_id, member2_id, count: 1)
+  end
+
+  after do
+    @stream.clear
+  end
+end

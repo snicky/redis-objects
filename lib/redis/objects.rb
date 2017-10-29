@@ -9,6 +9,7 @@ class Redis
   autoload :Lock,      'redis/lock'
   autoload :Set,       'redis/set'
   autoload :SortedSet, 'redis/sorted_set'
+  autoload :Stream,    'redis/stream'
   autoload :Value,     'redis/value'
   autoload :HashKey,   'redis/hash_key'
 
