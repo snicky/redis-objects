@@ -19,7 +19,7 @@ class Redis
     end
 
     def range(*args)
-      result = perform_xrange(*sanitize_xrange_args(args))
+      result = perform_xrange(args)
       result.reduce({}) do |memo, (member_id, member_array)|
         memo.merge!(member_id => parse_member_array(member_array))
       end
@@ -40,16 +40,24 @@ class Redis
     private
 
     def perform_xadd(member, timestamp="*")
-      redis.xadd key, timestamp, *member_to_array(member)
+      xadd_args = [key]
+      if (maxlength = options[:maxlength])
+        xadd_args << "MAXLEN"
+        xadd_args << "~" if options[:exact_length] == false
+        xadd_args << maxlength
+      end
+      xadd_args += [timestamp, *member_to_array(member)]
+      redis.xadd(*xadd_args)
     end
 
-    def perform_xrange(min, max, count)
+    def perform_xrange(args)
+      min, max, count = sanitize_range_args(args)
       xrange_args = [key, min, max]
       xrange_args += ["COUNT", count] if count
       redis.xrange *xrange_args
     end
 
-    def sanitize_xrange_args(args)
+    def sanitize_range_args(args)
       if args[0].is_a?(Hash)
         limits = args[0]
         min = limits[:min]

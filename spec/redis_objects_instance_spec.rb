@@ -1542,7 +1542,7 @@ describe Redis::Stream do
     end
   end
 
-  it "should handle reading members with various arguments" do
+  it "should handle reading members with various constraints" do
     member1_id = @stream << {foo: 1}
     member2_id = @stream << {bar: 2}
     member3_id = @stream << {baz: 3}
@@ -1573,7 +1573,189 @@ describe Redis::Stream do
       should == @stream.range(member1_id, member2_id, count: 1)
   end
 
+  it "should handle streams with limited length" do
+    @stream1 = Redis::Stream.new("spec/stream1", maxlength: 2)
+    member1_id = @stream1 << {foo: 1}
+    member2_id = @stream1 << {bar: 2}
+    member3_id = @stream1 << {baz: 3}
+    @stream1.length.should == 2
+    @stream1.members.should == {
+      member2_id => {'bar' => '2'},
+      member3_id => {'baz' => '3'}
+    }
+
+    @stream2 = Redis::Stream.new(
+      "spec/stream2", maxlength: 2, exact_length: false)
+    should.not.raise(Redis::CommandError) do
+      member1_id = @stream2 << {foo: 1}
+      member2_id = @stream2 << {bar: 2}
+      member3_id = @stream2 << {baz: 3}
+    end
+  end
+
   after do
     @stream.clear
   end
+end
+
+describe Redis::StreamReader do
+  def wait_for_result(read_block, write_block=nil)
+    read_result, write_result = nil, nil
+    reader_thread = Thread.new { read_result = read_block.call }
+    sleep(0.001) until reader_thread.stop?
+    write_result = write_block.call if write_block
+    sleep(0.001) until read_result
+    if write_block
+      [read_result, write_result]
+    else
+      read_result
+    end
+  end
+
+  before do
+    @reader_conn = ConnectionPool.new do
+      Redis.new(host: REDIS_HOST, port: REDIS_PORT)
+    end
+  end
+
+  describe '#read' do
+    describe 'should handle reading from a single stream' do
+      before do
+        @stream = Redis::Stream.new('spec/stream1')
+        @stream.clear
+        @stream_reader = Redis::StreamReader.new(
+          @reader_conn, stream: @stream, block: 1000)
+      end
+
+      it 'should return the next member if called without arguments' do
+        read_result, member1_id = wait_for_result(
+          -> { @stream_reader.read },
+          -> { @stream << {foo: 1} }
+        )
+        read_result.should == {member1_id => {'foo' => '1'}}
+      end
+
+      it 'should return all members with ids higher than the given id' do
+        member1_id = @stream << {foo: 1}
+        member2_id = @stream << {bar: 2}
+        member3_id = @stream << {baz: 3}
+        @stream_reader.read(member1_id).should == {
+          member2_id => {'bar' => '2'},
+          member3_id => {'baz' => '3'}
+        }
+        @stream_reader.read(member2_id).should == {
+          member3_id => {'baz' => '3'}
+        }
+      end
+
+      it 'should return a limited number of members if called with count' do
+        member1_id = @stream << {foo: 1}
+        member2_id = @stream << {bar: 2}
+        member3_id = @stream << {baz: 3}
+        member4_id = @stream << {qux: 4}
+        @stream_reader.read(member1_id, count: 2).should == {
+          member2_id => {'bar' => '2'},
+          member3_id => {'baz' => '3'}
+        }
+        @stream_reader.read(member2_id, count: 1).should == {
+          member3_id => {'baz' => '3'}
+        }
+      end
+    end
+
+    describe 'should handle reading from multiple streams' do
+      before do
+        @stream1 = Redis::Stream.new('spec/stream1')
+        @stream2 = Redis::Stream.new('spec/stream2')
+        @stream1.clear
+        @stream2.clear
+        @stream_reader = Redis::StreamReader.new(
+          @reader_conn, stream: [@stream1, @stream2], block: 1000)
+      end
+
+      it 'should return the next member if called without arguments' do
+        read_result, _ = wait_for_result(
+          -> { @stream_reader.read },
+          -> do
+            @stream1 << {foo: 1}
+            @stream2 << {bar: 2}
+          end
+        )
+        member1_id = @stream1.members.keys.first
+        read_result.should == {
+          "spec/stream1" => {member1_id => {'foo' => '1'}}
+        }
+      end
+
+      it 'should return all members with ids higher than the given id' do
+        member1_id = @stream1 << {foo: 1}
+        sleep 0.001
+        member2_id = @stream1 << {bar: 2}
+        sleep 0.001
+        member3_id = @stream2 << {baz: 3}
+        sleep 0.001
+        member4_id = @stream2 << {qux: 4}
+
+        @stream_reader.read(member1_id).should == {
+          "spec/stream1" => {
+            member2_id => {'bar' => '2'}
+          },
+          "spec/stream2" => {
+            member3_id => {'baz' => '3'},
+            member4_id => {'qux' => '4'}
+          }
+        }
+        @stream_reader.read(member2_id).should == {
+          "spec/stream2" => {
+            member3_id => {'baz' => '3'},
+            member4_id => {'qux' => '4'}
+          }
+        }
+      end
+
+      it 'should return a limited number of members per stream if called with count' do
+        member1_id = @stream1 << {foo: 1}
+        sleep 0.001
+        member2_id = @stream1 << {bar: 2}
+        sleep 0.001
+        member3_id = @stream2 << {baz: 3}
+        sleep 0.001
+        member4_id = @stream2 << {qux: 4}
+        sleep 0.001
+        member5_id = @stream2 << {quux: 5}
+        @stream_reader.read(member1_id, count: 2).should == {
+          "spec/stream1" => {
+            member2_id => {'bar' => '2'}
+          },
+          "spec/stream2" => {
+            member3_id => {'baz' => '3'},
+            member4_id => {'qux' => '4'}
+          }
+        }
+        @stream_reader.read(member2_id, count: 1).should == {
+          "spec/stream2" => {
+            member3_id => {'baz' => '3'}
+          }
+        }
+      end
+    end
+  end
+
+  # it "should handle reading from multiple streams" do
+  #   stream_reader = Redis::StreamReader.new(
+  #     @reader_conn, streams: [@stream1, @stream2], block: 1000)
+  #   read_result, _ = wait_for_result(
+  #     -> { stream_reader.read },
+  #     -> do
+  #       @stream1.redis.multi do
+  #         @stream1 << {foo: 1}
+  #         @stream2 << {bar: 2}
+  #       end
+  #     end
+  #   )
+  #   member1_id, member2_id = @stream1.members.keys
+  #   read_result.should == {'spec/stream1' => {member1_id => {'foo' => '1'}}}
+  #   read_result = wait_for_result(-> { stream_reader.read })
+  #   read_result.should == {'spec/stream2' => {member2_id => {'bar' => '2'}}}
+  # end
 end

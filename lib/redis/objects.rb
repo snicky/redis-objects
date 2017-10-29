@@ -4,14 +4,15 @@ require 'redis'
 require 'redis/objects/connection_pool_proxy'
 
 class Redis
-  autoload :Counter,   'redis/counter'
-  autoload :List,      'redis/list'
-  autoload :Lock,      'redis/lock'
-  autoload :Set,       'redis/set'
-  autoload :SortedSet, 'redis/sorted_set'
-  autoload :Stream,    'redis/stream'
-  autoload :Value,     'redis/value'
-  autoload :HashKey,   'redis/hash_key'
+  autoload :Counter,      'redis/counter'
+  autoload :List,         'redis/list'
+  autoload :Lock,         'redis/lock'
+  autoload :Set,          'redis/set'
+  autoload :SortedSet,    'redis/sorted_set'
+  autoload :Stream,       'redis/stream'
+  autoload :StreamReader, 'redis/stream_reader'
+  autoload :Value,        'redis/value'
+  autoload :HashKey,      'redis/hash_key'
 
   #
   # Redis::Objects enables high-performance atomic operations in your app

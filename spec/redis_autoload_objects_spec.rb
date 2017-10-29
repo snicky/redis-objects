@@ -43,6 +43,11 @@ describe 'Redis::Objects' do
     x.class.name.should == "Redis::Stream"
     x.redis.should == REDIS_HANDLE
 
+    defined?(::Redis::StreamReader).should == "constant"
+    x = Redis::StreamReader.new
+    x.class.name.should == "Redis::StreamReader"
+    x.redis.should == REDIS_HANDLE
+
     defined?(::Redis::Value).should == "constant"
     x = Redis::Value.new('x')
     x.class.name.should == "Redis::Value"
